@@ -1,0 +1,73 @@
+name: dependency-cooldown
+
+on:
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+
+jobs:
+  cooldown:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Enforce dependency cooldown
+        env:
+          COOLDOWN_DAYS: 3
+        run: |
+          set -euo pipefail
+
+          deps=$(jq -r '.dependencies // {} | to_entries[] | "\(.key) \(.value)"' package.json)
+
+          if [ -z "$deps" ]; then
+            echo "No dependencies found in package.json"
+            exit 0
+          fi
+
+          now=$(date -u +%s)
+          max_age_sec=$(( COOLDOWN_DAYS * 24 * 60 * 60 ))
+          too_new=0
+
+          echo "Checking dependencies… (cooldown: ${COOLDOWN_DAYS} days)"
+
+          while read -r name version; do
+            clean_version=${version#^}
+            clean_version=${clean_version#~}
+
+            echo "Checking $name@$clean_version …"
+
+            published_iso=$(npm view "${name}@${clean_version}" time --json | jq -r '.')
+            if [ "$published_iso" = "null" ] || [ -z "$published_iso" ]; then
+              echo "::warning::Cannot get publish date for ${name}@${clean_version}"
+              continue
+            fi
+
+            published_sec=$(date -u -d "$published_iso" +%s)
+            age_sec=$(( now - published_sec ))
+
+            if [ "$age_sec" -lt "$max_age_sec" ]; then
+              age_days=$(( age_sec / 86400 ))
+              echo "::error::${name}@${clean_version} is too new (age: ${age_days} days, needs >= ${COOLDOWN_DAYS})"
+              too_new=1
+            else
+              echo "${name}@${clean_version} is OK."
+            fi
+          done <<< "$deps"
+
+          if [ "$too_new" -eq 1 ]; then
+            echo "Some dependencies are still in cooldown."
+            exit 1
+          fi
