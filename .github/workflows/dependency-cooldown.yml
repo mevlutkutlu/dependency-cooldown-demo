@@ -21,7 +21,7 @@ jobs:
 
       - name: Enforce dependency cooldown (Node script)
         env:
-          COOLDOWN_DAYS: "3"
+          COOLDOWN_DAYS: "7"
         run: |
           node <<'NODE'
           const fs = require("fs");
